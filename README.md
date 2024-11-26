@@ -1,2 +1,3 @@
 # DV-Shared
-Shared repo for Dirk and Vinnie
+This is the shared repo for Dirk, Vinnie and Callum.
+I will periodically update this with important code.
