@@ -1,0 +1,304 @@
+---
+title: "R3 more noisy"
+author: "Callum Macaulay"
+date: "2024-11-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "R3"
+author: "Callum Macaulay"
+date: "2024-11-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(laGP)
+library(MASS)
+library(ggplot2)
+library(mvtnorm)
+library(plgp)
+library(deepgp)
+library("glue")
+library(lhs)
+library(rmarkdown)
+
+
+
+eps <- sqrt(.Machine$double.eps) 
+
+```
+
+```{r}
+set.seed(463581)
+
+```
+
+```{r}
+#Data Generation
+
+#Create Training data
+train.locations <- matrix(seq(-10, 10, length.out = 20), ncol=1)
+
+y.noisy <- as.vector(2*tanh(train.locations))
+for (i in seq_along(y.noisy)) {
+  y.noisy[i] <- y.noisy[i] + rnorm(1,mean=0, sd=1.5)
+}
+
+
+#create test data locations
+test.locations <- matrix(seq(-10, 10, length.out = 200), ncol=1)
+true.test.y <- 2*tanh(test.locations)
+
+
+#Plot of training data and target function
+plot(train.locations, y.noisy, type = "p", col="black", main = "Plot of training data and target function", ylab="tanh(x)", xlab="x")
+lines(test.locations, true.test.y, col="blue")
+
+
+```
+
+
+
+```{r}
+#Generate empirical Bayes regularization priors
+
+g <- garg(list(mle=TRUE, max=3), y.noisy)
+d <- darg(list(mle=TRUE, max=150), train.locations)
+
+#new GP
+gpi<-newGP(train.locations, y.noisy, d=d$start, g=g$start, dK=TRUE)
+mle <- jmleGP(gpi, c(d$min, d$max), c(g$min, g$max), d$ab, g$ab) 
+
+print(glue("Lengthscale: {mle$d}, noise: {mle$g}"))
+
+#Optimized GP
+gpi<-newGP(train.locations, y.noisy,d=mle$d, g=mle$g, dK=TRUE)
+
+p.gpi<-predGP(gpi, test.locations, nonug = TRUE)
+
+
+# Calculate predictive probabilities
+pred_probs <- dnorm(true.test.y, mean = p.gpi$mean, sd =sqrt(diag(p.gpi$Sigma)))
+
+
+
+#Realisation from GP and 90% interval
+realisation <- rmvnorm(5, p.gpi$mean, p.gpi$Sigma)
+q05 <- p.gpi$mean + qnorm(0.05, 0, sqrt(diag(p.gpi$Sigma)))
+q95 <- p.gpi$mean + qnorm(0.95, 0, sqrt(diag(p.gpi$Sigma)))
+
+
+#Plot Realisations
+matplot(test.locations, t(realisation), type="l", col="grey", main="GP with MLE lengthscale", ylim = c(-5,5))
+lines(test.locations, q05, lwd=2, lty=2, col=2)
+lines(test.locations, q95, lwd=2, lty=2, col=2)
+lines(test.locations, p.gpi$mean, lwd=2)
+lines(test.locations, true.test.y, col="blue")
+points(train.locations, y.noisy, pch=20, cex=2, )
+legend(x=0, y=0.3,legend=("dots - Observed data \nred - 95% CI\nblue - target tanh function \ngrey - realisation from GP \nBlack - GP mean"), bty ="n")
+
+plot(test.locations,pred_probs, main="Predictive Probability")
+
+
+print(glue("The mean predictive probability is {mean(pred_probs)}"))
+
+deleteGP(gpi)
+```
+
+
+```{r}
+# 2layer dgp with sq exp kernal
+se.dgp<- fit_two_layer(train.locations, y.noisy, vecchia = TRUE, m = 10, nmcmc = 50000, cov = c("exp2"), g_0 = 0.25)
+
+
+plot(se.dgp$ll)
+plot(se.dgp$g)
+plot(se.dgp$theta_y)
+plot(se.dgp$theta_w)
+
+mean(se.dgp$ll[-1])
+```
+```{r}
+p.se.dgp<-predict(se.dgp, x_new = test.locations, lite = FALSE, m = 10, interval="predict", mean_map = TRUE)
+```
+
+```{r}
+dgp<- fit_two_layer(train.locations, y.noisy, vecchia = FALSE, m = 10, nmcmc = 100000, cov = c("exp2"))
+
+```
+
+```{r}
+plot(dgp$ll)
+plot(dgp$g)
+plot(dgp$theta_y)
+plot(dgp$theta_w)
+
+mean(dgp$ll[-1])
+```
+
+```{r}
+p.dgp<-predict(dgp, x_new = test.locations, lite = FALSE, interval="predict", mean_map = TRUE)
+```
+
+
+```{r}
+q05<- p.dgp$mean + qnorm(0.05, 0,  sqrt(diag(p.dgp$Sigma)))
+q95 <- p.dgp$mean + qnorm(0.95, 0, sqrt(diag(p.dgp$Sigma)))
+
+
+plot(test.locations, p.dgp$mean , type = "l", main="2 layer", ylim = c(-5,5))
+    points(train.locations, y.noisy, pch=20, cex=2)
+  lines(test.locations, p.dgp$mean, lwd=2)
+    lines(test.locations, q05, lwd=2, lty=2, col=2) 
+    lines(test.locations, q95, lwd=2, lty=2, col=2) 
+    lines(test.locations, 2*tanh(test.locations), col="blue")
+    legend(x=0, y=1,legend=("dots - Observed data \nred - 95% CI\nblue - target tanh function \nBlack - GP mean"), bty ="n")
+
+
+pred_probs<- dnorm(true.test.y, p.dgp$mean, sqrt(diag(p.dgp$Sigma)))
+
+
+plot(test.locations,pred_probs, main="Predictive Probability")
+
+
+print(glue("The mean predictive probability is {mean(pred_probs)}"))
+    
+```
+
+```{r}
+t.dgp<- fit_three_layer(train.locations, y.noisy, vecchia = FALSE, m = 10, nmcmc = 100000, cov = c("exp2"))
+
+```
+
+```{r}
+plot(t.dgp$ll)
+plot(t.dgp$g)
+plot(t.dgp$theta_y)
+plot(t.dgp$theta_w)
+
+mean(t.dgp$ll[-1])
+```
+
+
+```{r}
+p.t.dgp<-predict(t.dgp, x_new = test.locations, lite = FALSE, interval="predict", mean_map = TRUE)
+```
+
+
+```{r}
+q05<- p.t.dgp$mean + qnorm(0.05, 0,  sqrt(diag(p.t.dgp$Sigma)))
+q95 <- p.t.dgp$mean + qnorm(0.95, 0, sqrt(diag(p.t.dgp$Sigma)))
+
+
+plot(test.locations, p.t.dgp$mean , type = "l", main="3 layer", ylim = c(-5, 5))
+    points(train.locations, y.noisy, pch=20, cex=2)
+  lines(test.locations, p.t.dgp$mean, lwd=2)
+    lines(test.locations, q05, lwd=2, lty=2, col=2) 
+    lines(test.locations, q95, lwd=2, lty=2, col=2) 
+    lines(test.locations, 2*tanh(test.locations), col="blue")
+    legend(x=0, y=1,legend=("dots - Observed data \nred - 95% CI\nblue - target tanh function\nBlack - GP mean"), bty ="n")
+
+
+pred_probs<- dnorm(true.test.y, p.t.dgp$mean, sqrt(diag(p.t.dgp$Sigma)))
+
+plot(test.locations,pred_probs, main="Predictive Probability")
+
+
+mean(pred_probs)
+  
+```
+
+```{r}
+
+
+theta_w_samples <- t.dgp$theta_w
+theta_y_samples <- t.dgp$theta_y
+
+
+# Step 3: Plot the heatmap
+# Convert theta_y_samples and g_samples to a data frame for plotting
+df_samples <- data.frame(theta_w = theta_w_samples,theta_y = theta_y_samples )
+
+# Plot heatmap of `theta_w' vs `theta_y` using ggplot2
+ggplot(df_samples, aes(x = theta_w, y = theta_y)) +
+  geom_bin2d(bins = 50) +                     # 2D binning for density
+  scale_fill_viridis_c() +                    # Use a color scale for density
+  labs(title = "Heatmap of outer lengthscale vs inner lengthscale",
+       x = "theta_w (Inner Layer Length Scale)",
+       y = "theta_y (Outer Layer Length Scale)") +
+  theme_minimal()
+
+```
+
+```{r}
+
+# Generate realizations
+realisation_smooth <- mvrnorm(2, p.t.dgp$mean, p.t.dgp$Sigma)
+
+
+# Plot the realizations
+q05 <- p.t.dgp$mean + qnorm(0.05, 0, sqrt(diag(p.t.dgp$Sigma)))
+q95 <- p.t.dgp$mean + qnorm(0.95, 0, sqrt(diag(p.t.dgp$Sigma)))
+
+matplot(test.locations, t(realisation_smooth), col = rainbow(2), type = "l", main = "2 Layer (noisy Realizations)", ylim = c(-6, 6))
+points(train.locations, y.noisy, bg="black", pch = 21)
+lines(test.locations, p.t.dgp$mean, lwd = 2, col = "black")
+lines(test.locations, q05, lwd = 3, lty = 2, col = 2)  # 95% CI lower
+lines(test.locations, q95, lwd = 3, lty = 2, col = 2)  # 95% CI upper
+lines(test.locations, 2*tanh(test.locations), col = "blue", lwd = 2)  # Target function
+legend(x = 0, y = 0,  legend = c("dots - Observed data", "red - 95% CI", "blue - target tanh function",  "rainbow -  realization from GP", "black - GP mean", "hollow dots - predictive probability"),bty = "n")
+
+
+pred_probs<- dnorm(true.test.y, p.t.dgp$mean, sqrt(diag(p.t.dgp$Sigma)))
+print(glue("The mean predictive probability is {mean(pred_probs)}"))
+
+```
+
+
+
+```{r}
+# Subtract noise variance (nugget) from the covariance matrix
+Sigma_smooth <- p.t.dgp$Sigma - diag(mean(p.t.dgp$g), nrow(p.t.dgp$Sigma))
+
+### Ensure the covariance matrix remains positive definite
+#Sigma_smooth <- (Sigma_smooth + t(Sigma_smooth)) / 2  # Enforce symmetry
+#eig <- eigen(Sigma_smooth)
+#Sigma_smooth <- eig$vectors %*% diag(pmax(eig$values, 1e-10)) %*% t(eig$vectors)
+
+# Generate realizations without noise
+realisation_smooth <- mvrnorm(2, p.t.dgp$mean, Sigma_smooth)
+
+# Plot the smooth realizations
+q05 <- p.t.dgp$mean + qnorm(0.05, 0, sqrt(diag(Sigma_smooth)))
+q95 <- p.t.dgp$mean + qnorm(0.95, 0, sqrt(diag(Sigma_smooth)))
+
+matplot(test.locations, t(realisation_smooth), col = rainbow(5), type = "l", main = "2 Layer (Smooth Realizations)", ylim = c(-6, 6))
+points(train.locations, y.noisy, bg="black", pch = 21)
+lines(test.locations, p.t.dgp$mean, lwd = 2, col = "black")
+lines(test.locations, q05, lwd = 3, lty = 2, col = 2)  # 95% CI lower
+lines(test.locations, q95, lwd = 3, lty = 2, col = 2)  # 95% CI upper
+lines(test.locations, 2*tanh(test.locations), col = "blue", lwd = 2)  # Target function
+points(test.locations, pred_probs)
+legend(x = 0, y = 0,  legend = c("dots - Observed data", "red - 95% CI", "blue - target tanh function",  "rainbow - smooth realization from GP", "black - GP mean", "hollow dots - predictive probability"),bty = "n")
+
+
+pred_probs<- dnorm(true.test.y, p.t.dgp$mean, sqrt(diag(Sigma_smooth)))
+print(glue("The mean predictive probability is {mean(pred_probs)}"))
+
+```
+
+
+
+```{r}
+hist(dgp$theta_y)
+```
+
